@@ -1,8 +1,12 @@
+"""
+CNC Billing — single file (engine + modern UI).
+Run:  python3 cnc_billing.py
+"""
 import os, sys, json, sqlite3, subprocess, datetime as dt, re
 from pathlib import Path
 from xml.sax.saxutils import escape
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -51,7 +55,21 @@ DEFAULT_COMPANY = {
     "gstin": "33AJYPP4045R1Z8",
     "state": "Tamil Nadu",
     "state_code": "33",
+    "bank_name": "ICICI Bank",
+    "bank_branch": "Avinashi Road, Coimbatore",
+    "bank_account_name": "CNC Monitor Care",
+    "bank_account_no": "058705003129",
+    "bank_ifsc": "ICIC0000587",
 }
+
+TERMS = [
+    "6 Month Warranty for Spares",
+    "100% Advance before Delivery",
+    "Delivery Time 5 days",
+    "GST Taxes all included",
+    "No Return",
+    "No Refund",
+]
 
 DOC_TYPES = ["Quotation", "Proforma Invoice", "Invoice",
              "Delivery Challan", "Purchase Order"]
@@ -281,11 +299,11 @@ def make_pdf(data, path):
     if LOGO_FILE.exists():
         try:
             iw, ih = ImageReader(str(LOGO_FILE)).getSize()
-            target_h = 16 * mm
-            target_w = target_h * (iw / ih)
-            if target_w > 80 * mm:
-                target_w = 80 * mm
-                target_h = target_w * (ih / iw)
+            max_w = 120 * mm
+            max_h = 22 * mm
+            scale = min(max_w / iw, max_h / ih)
+            target_w = iw * scale
+            target_h = ih * scale
             logo_img = RLImage(str(LOGO_FILE), width=target_w, height=target_h)
             logo_img.hAlign = 'LEFT'
             company_text = Paragraph(
@@ -295,7 +313,7 @@ def make_pdf(data, path):
                 f"GSTIN: {escape(COMPANY['gstin'])} | State: "
                 f"{escape(COMPANY['state'])} ({escape(COMPANY['state_code'])})",
                 h_small)
-            left = Table([[logo_img], [company_text]], colWidths=[95 * mm])
+            left = Table([[logo_img], [company_text]], colWidths=[130 * mm])
             left.setStyle(TableStyle([
                 ('LEFTPADDING', (0, 0), (-1, -1), 0),
                 ('RIGHTPADDING', (0, 0), (-1, -1), 0),
@@ -306,14 +324,14 @@ def make_pdf(data, path):
             left = fallback
 
     title_bar = Table([[Paragraph(data['doc_type'].upper(), h_doc)]],
-                      colWidths=[70*mm])
+                      colWidths=[40*mm])
     title_bar.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), HEADER_BG),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 6),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
     ]))
-    header = Table([[left, title_bar]], colWidths=[100*mm, 70*mm])
+    header = Table([[left, title_bar]], colWidths=[130*mm, 40*mm])
     header.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP')]))
     story.append(header)
     story.append(Spacer(1, 4*mm))
@@ -402,7 +420,50 @@ def make_pdf(data, path):
         story.append(Spacer(1, 3*mm))
         story.append(Paragraph(f"<b>Notes:</b> {escape(data['notes'])}", h_small))
 
-    story.append(Spacer(1, 12*mm))
+    bank_lines = [
+        f"<b>Bank Name:</b> {escape(COMPANY.get('bank_name', ''))}",
+        f"<b>Branch:</b> {escape(COMPANY.get('bank_branch', ''))}",
+        f"<b>Account Name:</b> {escape(COMPANY.get('bank_account_name', ''))}",
+        f"<b>Account No:</b> {escape(COMPANY.get('bank_account_no', ''))}",
+        f"<b>IFSC Code:</b> {escape(COMPANY.get('bank_ifsc', ''))}",
+    ]
+    bank_title = Paragraph("<b>BANK DETAILS</b>", cell)
+    bank_body = Paragraph("<br/>".join(bank_lines), cell)
+    bank_table = Table([[bank_title], [bank_body]], colWidths=[80 * mm])
+    bank_table.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.4, BOX_GRAY),
+    ]))
+
+    terms_items = "".join(f"&bull;&nbsp; {escape(t)}<br/>" for t in TERMS)
+    terms_title = Paragraph("<b>TERMS &amp; CONDITIONS</b>", cell)
+    terms_body = Paragraph(f"<font size=8>{terms_items}</font>", cell)
+    terms_table = Table([[terms_title], [terms_body]], colWidths=[80 * mm])
+    terms_table.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.4, BOX_GRAY),
+    ]))
+
+    side = Table([[bank_table, terms_table]], colWidths=[85 * mm, 85 * mm])
+    side.setStyle(TableStyle([
+        ('BOX', (0, 0), (0, 0), 0.5, BOX_GRAY),
+        ('BOX', (1, 0), (1, 0), 0.5, BOX_GRAY),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    story.append(Spacer(1, 6*mm))
+    story.append(side)
+
+    story.append(Spacer(1, 10*mm))
     sign = Table([
         ["", f"For {COMPANY['name']}"],
         ["", ""],
@@ -440,6 +501,80 @@ def make_pdf(data, path):
     return path
 
 
+# ============================================================
+# UI THEME (modern look)
+# ============================================================
+BG = "#F3F1EE"
+PANEL = "#FFFFFF"
+INK = "#1D1D1F"
+MUTE = "#6B6B70"
+LINE = "#DCD8D2"
+SOFT = "#FAF8F6"
+RED = "#C4161C"
+RED_DK = "#A31217"
+GREEN = "#1F8A3B"
+GREEN_DK = "#186E2E"
+UI_DARK = "#222222"
+
+FONT = ("Segoe UI", 10)
+FONT_B = ("Segoe UI", 10, "bold")
+FONT_S = ("Segoe UI", 9)
+FONT_H = ("Segoe UI", 11, "bold")
+
+
+def apply_theme(root):
+    s = ttk.Style(root)
+    s.theme_use("clam")
+    root.configure(bg=BG)
+    s.configure(".", font=FONT, background=PANEL, foreground=INK)
+    s.configure("TFrame", background=PANEL)
+    s.configure("Bg.TFrame", background=BG)
+    s.configure("TLabel", background=PANEL, foreground=INK)
+    s.configure("Mute.TLabel", foreground=MUTE, font=FONT_S)
+    s.configure("Card.TLabel", background=PANEL, foreground=INK, font=FONT_H)
+
+    for w in ("TEntry", "TCombobox"):
+        s.configure(w, fieldbackground=SOFT, background=SOFT, bordercolor=LINE,
+                    lightcolor=LINE, darkcolor=LINE, padding=5)
+        s.map(w, bordercolor=[("focus", RED)], lightcolor=[("focus", RED)],
+              darkcolor=[("focus", RED)])
+    s.map("TCombobox", fieldbackground=[("readonly", SOFT)])
+
+    def button(name, bg, hover, fg="white"):
+        s.configure(name, background=bg, foreground=fg, bordercolor=bg,
+                    focusthickness=0, padding=(14, 7), font=FONT_B, relief="flat")
+        s.map(name, background=[("active", hover), ("pressed", hover)])
+
+    button("Primary.TButton", RED, RED_DK)
+    button("Success.TButton", GREEN, GREEN_DK)
+    button("Ghost.TButton", PANEL, SOFT, fg=INK)
+    s.configure("Ghost.TButton", bordercolor=LINE, font=FONT)
+    s.map("Ghost.TButton", bordercolor=[("active", RED)])
+
+    s.configure("Treeview", background=PANEL, fieldbackground=PANEL,
+                foreground=INK, rowheight=28, borderwidth=0, font=FONT)
+    s.configure("Treeview.Heading", background=UI_DARK, foreground="white",
+                font=FONT_B, relief="flat", padding=6)
+    s.map("Treeview.Heading", background=[("active", UI_DARK)])
+    s.map("Treeview", background=[("selected", RED)],
+          foreground=[("selected", "white")])
+
+
+def card(parent, title):
+    outer = tk.Frame(parent, bg=LINE, padx=1, pady=1)
+    inner = tk.Frame(outer, bg=PANEL, padx=14, pady=12)
+    inner.pack(fill="both", expand=True)
+
+    ttk.Label(inner, text=title, style="Card.TLabel").pack(anchor="w", pady=(0, 6))
+
+    content = tk.Frame(inner, bg=PANEL)
+    content.pack(fill="both", expand=True)
+    return outer, content
+
+
+# ============================================================
+# DIALOGS
+# ============================================================
 class PreviewDialog(tk.Toplevel):
     def __init__(self, master, pdf_path):
         super().__init__(master)
@@ -450,8 +585,7 @@ class PreviewDialog(tk.Toplevel):
 
         info = ttk.Frame(self, padding=8)
         info.pack(fill='x')
-        ttk.Label(info, text=f"File: {pdf_path}",
-                  font=('Segoe UI', 9)).pack(side='left')
+        ttk.Label(info, text=f"File: {pdf_path}").pack(side='left')
 
         btns = ttk.Frame(self, padding=(8, 0, 8, 8))
         btns.pack(fill='x')
@@ -465,8 +599,7 @@ class PreviewDialog(tk.Toplevel):
 
         self.status = ttk.Label(self,
                                 text="Check the document, then click "
-                                     "'Send to Printer' if it looks good.",
-                                foreground="#555555")
+                                     "'Send to Printer' if it looks good.")
         self.status.pack(anchor='w', padx=8, pady=(0, 4))
 
         container = ttk.Frame(self)
@@ -488,18 +621,13 @@ class PreviewDialog(tk.Toplevel):
             self.canvas.delete("all")
             self.canvas.create_image(0, 0, anchor='nw', image=self._tk_img)
             self.canvas.config(scrollregion=self.canvas.bbox("all"))
-            self.status.config(
-                text=f"Preview (page 1 of {len(pdf)}). "
-                     f"Click 'Send to Printer' when ready.")
+            self.status.config(text=f"Preview (page 1 of {len(pdf)}).")
         except Exception:
             self.canvas.delete("all")
             self.canvas.create_text(
-                20, 20, anchor='nw', fill="#333333",
-                font=('Segoe UI', 10),
+                20, 20, anchor='nw', fill="#333333", font=FONT,
                 text=("In-app preview needs pypdfium2 and Pillow.\n\n"
-                      "Install with:\n"
-                      "    pip3 install pypdfium2 pillow\n\n"
-                      "Meanwhile, the PDF is already open in your viewer."))
+                      "Install: pip3 install pypdfium2 pillow"))
 
     def _open_viewer(self):
         try:
@@ -510,8 +638,7 @@ class PreviewDialog(tk.Toplevel):
             else:
                 subprocess.run(["xdg-open", str(self.pdf_path)], check=False)
         except Exception as e:
-            messagebox.showerror("Open", f"Could not open PDF:\n{e}",
-                                 parent=self)
+            messagebox.showerror("Open", f"Could not open PDF:\n{e}", parent=self)
 
     def _send_to_printer(self):
         printer = getattr(self.master, "printer_var", None)
@@ -533,20 +660,19 @@ class PreviewDialog(tk.Toplevel):
 
 class SettingsDialog(tk.Toplevel):
     FIELDS = [
-        ("Company Name", "name"),
-        ("Address", "address"),
-        ("City / State / PIN", "city"),
-        ("Phone", "phone"),
-        ("Email", "email"),
-        ("GSTIN", "gstin"),
-        ("State", "state"),
-        ("State Code", "state_code"),
+        ("Company Name", "name"), ("Address", "address"),
+        ("City / State / PIN", "city"), ("Phone", "phone"),
+        ("Email", "email"), ("GSTIN", "gstin"),
+        ("State", "state"), ("State Code", "state_code"),
+        ("Bank Name", "bank_name"), ("Bank Branch", "bank_branch"),
+        ("Account Name", "bank_account_name"), ("Account No", "bank_account_no"),
+        ("IFSC Code", "bank_ifsc"),
     ]
 
     def __init__(self, master, on_save):
         super().__init__(master)
         self.title("Company Settings")
-        self.geometry("520x420")
+        self.geometry("540x560")
         self.transient(master)
         self.grab_set()
         self.on_save = on_save
@@ -622,6 +748,9 @@ class HistoryDialog(tk.Toplevel):
         self.destroy()
 
 
+# ============================================================
+# BASE APP (engine, headless of UI layout)
+# ============================================================
 class BillingApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -641,164 +770,21 @@ class BillingApp(tk.Tk):
         self._refresh_doc_no()
         self._recalc()
 
+    # Default UI (overridden by ModernBillingApp)
     def _build_ui(self):
-        bar = ttk.Frame(self, padding=8)
-        bar.pack(fill='x')
+        ttk.Label(self, text="Loading…").pack()
 
-        ttk.Label(bar, text="Type:").pack(side='left')
-        self.doc_type = ttk.Combobox(bar, values=DOC_TYPES, state='readonly',
-                                     width=18)
-        self.doc_type.current(2)
-        self.doc_type.pack(side='left', padx=4)
-        self.doc_type.bind('<<ComboboxSelected>>', lambda e: self._refresh_doc_no())
-
-        ttk.Label(bar, text="Doc No:").pack(side='left', padx=(12, 0))
-        self.doc_no = ttk.Entry(bar, width=18)
-        self.doc_no.pack(side='left', padx=4)
-
-        ttk.Label(bar, text="Date:").pack(side='left', padx=(12, 0))
-        self.doc_date = ttk.Entry(bar, width=12)
-        self.doc_date.insert(0, dt.date.today().isoformat())
-        self.doc_date.pack(side='left', padx=4)
-
-        ttk.Button(bar, text="Settings",
-                   command=self._open_settings).pack(side='right', padx=4)
-        ttk.Button(bar, text="History",
-                   command=self._open_history).pack(side='right', padx=4)
-
-        body = ttk.Frame(self, padding=8)
-        body.pack(fill='both', expand=True)
-
-        left = ttk.LabelFrame(body, text="Party Details", padding=8)
-        left.pack(side='left', fill='y', padx=(0, 8))
-
-        cm = ttk.Frame(left)
-        cm.pack(fill='x', pady=(0, 6))
-        ttk.Label(cm, text="Saved Customer:").pack(anchor='w')
-        pick_row = ttk.Frame(cm)
-        pick_row.pack(fill='x')
-        self.customer_pick = ttk.Combobox(pick_row, state='readonly', width=28)
-        self.customer_pick.pack(side='left', fill='x', expand=True)
-        self.customer_pick.bind('<<ComboboxSelected>>', self._load_customer)
-        ttk.Button(pick_row, text="↻", width=3,
-                   command=self._refresh_customer_list).pack(side='left', padx=(4, 0))
-
-        self.party = {}
-        for label, key, is_text in [
-            ("Name", "party_name", False),
-            ("Address", "party_address", True),
-            ("GSTIN", "party_gstin", False),
-            ("State", "party_state", False),
-            ("Phone", "party_phone", False),
-            ("Email", "party_email", False),
-        ]:
-            ttk.Label(left, text=label).pack(anchor='w', pady=(4, 0))
-            if is_text:
-                w = tk.Text(left, width=32, height=4)
-                w.pack(fill='x')
-            else:
-                w = ttk.Entry(left, width=34)
-                w.pack(fill='x')
-            self.party[key] = w
-
-        right = ttk.LabelFrame(body, text="Line Items", padding=8)
-        right.pack(side='left', fill='both', expand=True)
-
-        cols = ("desc", "hsn", "qty", "unit", "rate", "amount")
-        self.tree = ttk.Treeview(right, columns=cols, show='headings', height=12)
-        for c, w, t in zip(cols, (280, 80, 60, 60, 90, 100),
-                           ("Item Name", "HSN", "Qty", "Unit", "Rate", "Amount")):
-            self.tree.heading(c, text=t)
-            self.tree.column(c, width=w, anchor='w')
-        self.tree.pack(fill='both', expand=True)
-
-        add = ttk.Frame(right)
-        add.pack(fill='x', pady=(8, 0))
-        self.fields = {}
-
-        ttk.Label(add, text="Item Name:").pack(side='left')
-        e = ttk.Entry(add, width=26); e.pack(side='left', padx=2)
-        self.fields['desc'] = e
-
-        ttk.Label(add, text="HSN:").pack(side='left')
-        h = ttk.Combobox(add, width=8, values=HSN_CHOICES); h.pack(side='left', padx=2)
-        self.fields['hsn'] = h
-
-        ttk.Label(add, text="Qty:").pack(side='left')
-        q = ttk.Entry(add, width=6); q.pack(side='left', padx=2)
-        self.fields['qty'] = q
-
-        ttk.Label(add, text="Unit:").pack(side='left')
-        u = ttk.Combobox(add, width=6, values=UNIT_CHOICES); u.set("Nos")
-        u.pack(side='left', padx=2)
-        self.fields['unit'] = u
-
-        ttk.Label(add, text="Rate:").pack(side='left')
-        r = ttk.Entry(add, width=8); r.pack(side='left', padx=2)
-        self.fields['rate'] = r
-
-        for w in self.fields.values():
-            w.bind("<Return>", lambda _e: self._add_item())
-
-        ttk.Button(add, text="Add",
-                   command=self._add_item).pack(side='left', padx=4)
-        ttk.Button(add, text="Remove",
-                   command=self._remove_item).pack(side='left', padx=2)
-        ttk.Button(add, text="Save Customer",
-                   command=self._save_current_customer).pack(side='left', padx=8)
-
-        bot = ttk.LabelFrame(self, text="Totals & Notes", padding=8)
-        bot.pack(fill='x', padx=8, pady=(0, 8))
-
-        r1 = ttk.Frame(bot); r1.pack(fill='x')
-        ttk.Label(r1, text="Discount:").pack(side='left')
-        self.discount = ttk.Entry(r1, width=10); self.discount.insert(0, "0")
-        self.discount.pack(side='left', padx=4)
-
-        ttk.Label(r1, text="GST %:").pack(side='left', padx=(12, 0))
-        self.gst_rate = ttk.Entry(r1, width=6); self.gst_rate.insert(0, "18")
-        self.gst_rate.pack(side='left', padx=4)
-
-        ttk.Label(r1, text="Supply:").pack(side='left', padx=(12, 0))
-        self.supply = ttk.Combobox(r1, state='readonly', width=22,
-                                   values=["Intra-State (CGST+SGST)",
-                                           "Inter-State (IGST)"])
-        self.supply.current(0)
-        self.supply.pack(side='left', padx=4)
-
-        ttk.Button(r1, text="Recalculate",
-                   command=self._recalc).pack(side='left', padx=8)
-        ttk.Button(r1, text="Preview",
-                   command=self._preview).pack(side='right', padx=4)
-        ttk.Button(r1, text="Generate PDF",
-                   command=self._generate).pack(side='right', padx=4)
-        ttk.Button(r1, text="Print",
-                   command=self._print).pack(side='right', padx=4)
-        ttk.Label(r1, text="USB Printer:").pack(side='right', padx=(12, 2))
-        self.printer_var = tk.StringVar()
-        self.printer_pick = ttk.Combobox(r1, textvariable=self.printer_var,
-                                         state='readonly', width=20)
-        self.printer_pick.pack(side='right', padx=2)
-
-        ttk.Label(bot, text="Notes:").pack(anchor='w', pady=(8, 0))
-        self.notes = tk.Text(bot, height=3)
-        self.notes.pack(fill='x')
-
-        self.summary = ttk.Label(bot,
-                                 text="Subtotal: 0.00   Tax: 0.00   Total: 0.00",
-                                 font=('Segoe UI', 10, 'bold'))
-        self.summary.pack(anchor='w', pady=(8, 0))
-
-        self._refresh_customer_list()
-        self._refresh_usb_printers()
-
+    # ---------- Actions shared by all UI variants ----------
     def _refresh_customer_list(self):
         names = sorted(CUSTOMERS.keys())
-        self.customer_pick['values'] = names
-        if names and not self.customer_pick.get():
-            self.customer_pick.set(names[0])
+        if hasattr(self, "customer_pick"):
+            self.customer_pick['values'] = names
+            if names and not self.customer_pick.get():
+                self.customer_pick.set(names[0])
 
     def _refresh_usb_printers(self):
+        if not hasattr(self, "printer_pick"):
+            return
         printers = [name for name, _ in list_usb_printers()]
         self.printer_pick['values'] = printers
         if printers:
@@ -812,11 +798,9 @@ class BillingApp(tk.Tk):
         for key, widget in self.party.items():
             val = rec.get(key, '')
             if isinstance(widget, tk.Text):
-                widget.delete('1.0', 'end')
-                widget.insert('1.0', val)
+                widget.delete('1.0', 'end'); widget.insert('1.0', val)
             else:
-                widget.delete(0, 'end')
-                widget.insert(0, val)
+                widget.delete(0, 'end'); widget.insert(0, val)
 
     def _save_current_customer(self):
         party = {}
@@ -852,10 +836,8 @@ class BillingApp(tk.Tk):
 
     def _apply_data(self, data):
         self.doc_type.set(data.get('doc_type', DOC_TYPES[2]))
-        self.doc_no.delete(0, 'end')
-        self.doc_no.insert(0, data.get('doc_no', ''))
-        self.doc_date.delete(0, 'end')
-        self.doc_date.insert(0, data.get('doc_date', ''))
+        self.doc_no.delete(0, 'end'); self.doc_no.insert(0, data.get('doc_no', ''))
+        self.doc_date.delete(0, 'end'); self.doc_date.insert(0, data.get('doc_date', ''))
         for k, w in self.party.items():
             val = data.get(k, '') or ''
             if isinstance(w, tk.Text):
@@ -866,8 +848,9 @@ class BillingApp(tk.Tk):
         self._refresh_tree()
         self.notes.delete('1.0', 'end')
         self.notes.insert('1.0', data.get('notes', ''))
-        self.discount.delete(0, 'end')
-        self.discount.insert(0, str(data.get('discount', 0) or 0))
+        if hasattr(self, "discount"):
+            self.discount.delete(0, 'end')
+            self.discount.insert(0, str(data.get('discount', 0) or 0))
         self._recalc()
 
     def _add_item(self):
@@ -905,11 +888,11 @@ class BillingApp(tk.Tk):
 
     def _refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
-        for it in self.items:
+        for n, it in enumerate(self.items):
             amt = float(it['qty']) * float(it['rate'])
             self.tree.insert('', 'end', values=(
                 it['desc'], it.get('hsn', ''), f"{it['qty']:g}",
-                it.get('unit', 'Nos'), f"{it['rate']:.2f}", f"{amt:.2f}"))
+                it.get('unit', 'Nos'), f"{it['rate']:,.2f}", f"{amt:,.2f}"))
 
     def _compute(self):
         subtotal = sum(float(i['qty']) * float(i['rate']) for i in self.items)
@@ -928,10 +911,14 @@ class BillingApp(tk.Tk):
 
     def _recalc(self):
         t = self._compute()
-        self.summary.config(
-            text=f"Subtotal: {t['subtotal']:,.2f}   "
-                 f"Tax: {t['cgst']+t['sgst']+t['igst']:,.2f}   "
-                 f"Total: {t['total']:,.2f}")
+        if hasattr(self, "summary"):
+            try:
+                self.summary.config(
+                    text=f"Subtotal: {t['subtotal']:,.2f}   "
+                         f"Tax: {t['cgst']+t['sgst']+t['igst']:,.2f}   "
+                         f"Total: {t['total']:,.2f}")
+            except Exception:
+                pass
         return t
 
     def _collect(self):
@@ -978,8 +965,7 @@ class BillingApp(tk.Tk):
         save_document(data)
         if data.get('party_name'):
             try:
-                remember_customer(data)
-                self._refresh_customer_list()
+                remember_customer(data); self._refresh_customer_list()
             except Exception:
                 pass
         messagebox.showinfo("Done", f"Generated:\n{pdf_path}")
@@ -999,7 +985,7 @@ class BillingApp(tk.Tk):
             return
         data, pdf_path = result
         save_document(data)
-        printer = self.printer_var.get().strip()
+        printer = self.printer_var.get().strip() if hasattr(self, "printer_var") else ""
         try:
             if sys.platform.startswith('win'):
                 os.startfile(str(pdf_path), "print")
@@ -1014,10 +1000,241 @@ class BillingApp(tk.Tk):
             messagebox.showerror("Print", f"Could not print: {e}")
 
 
+# ============================================================
+# MODERN UI (inherits from BillingApp)
+# ============================================================
+class ModernBillingApp(BillingApp):
+
+    def _build_ui(self):
+        apply_theme(self)
+        self.configure(padx=0, pady=0)
+
+        self._build_header()
+        body = ttk.Frame(self, style="Bg.TFrame", padding=(14, 12, 14, 0))
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        self._build_party(body)
+        self._build_items(body)
+        self._build_footer()
+
+        self._refresh_customer_list()
+        self._refresh_usb_printers()
+
+    def _build_header(self):
+        bar = tk.Frame(self, bg=PANEL, padx=16, pady=8)
+        bar.pack(fill="x")
+        tk.Frame(self, bg=RED, height=3).pack(fill="x")
+
+        try:
+            img = tk.PhotoImage(file=str(LOGO_FILE))
+            k = max(1, img.width() // 260)
+            self._logo = img.subsample(k, k) if k > 1 else img
+            tk.Label(bar, image=self._logo, bg=PANEL).pack(side="left")
+        except Exception:
+            tk.Label(bar, text=COMPANY["name"], bg=PANEL,
+                     font=("Segoe UI", 16, "bold"), fg=RED).pack(side="left")
+
+        right = tk.Frame(bar, bg=PANEL)
+        right.pack(side="right")
+        ttk.Button(right, text="History", style="Ghost.TButton",
+                   command=self._open_history).pack(side="right", padx=(6, 0))
+        ttk.Button(right, text="Settings", style="Ghost.TButton",
+                   command=self._open_settings).pack(side="right", padx=(6, 0))
+        ttk.Button(right, text="New", style="Ghost.TButton",
+                   command=self._new_doc).pack(side="right", padx=(6, 0))
+
+        meta = tk.Frame(bar, bg=PANEL)
+        meta.pack(side="right", padx=24)
+        self.doc_type = self._labeled(meta, "Type", ttk.Combobox, 0,
+                                      values=DOC_TYPES, state="readonly", width=17)
+        self.doc_type.current(2)
+        self.doc_type.bind("<<ComboboxSelected>>", lambda e: self._refresh_doc_no())
+        self.doc_no = self._labeled(meta, "Doc no", ttk.Entry, 1, width=17)
+        self.doc_date = self._labeled(meta, "Date", ttk.Entry, 2, width=12)
+        self.doc_date.insert(0, dt.date.today().isoformat())
+
+    @staticmethod
+    def _labeled(parent, text, cls, col, **kw):
+        ttk.Label(parent, text=text, style="Mute.TLabel").grid(
+            row=0, column=col, sticky="w", padx=(0 if col == 0 else 10, 0))
+        w = cls(parent, **kw)
+        w.grid(row=1, column=col, padx=(0 if col == 0 else 10, 0))
+        return w
+
+    def _build_party(self, body):
+        outer, left = card(body, "Party details")
+        outer.grid(row=0, column=0, sticky="ns", padx=(0, 12))
+
+        ttk.Label(left, text="Saved customer", style="Mute.TLabel").pack(anchor="w")
+        row = ttk.Frame(left)
+        row.pack(fill="x", pady=(2, 4))
+        self.customer_pick = ttk.Combobox(row, state="readonly", width=26)
+        self.customer_pick.pack(side="left", fill="x", expand=True)
+        self.customer_pick.bind("<<ComboboxSelected>>", self._load_customer)
+        ttk.Button(row, text="↻", width=3, style="Ghost.TButton",
+                   command=self._refresh_customer_list).pack(side="left", padx=(4, 0))
+
+        self.party = {}
+        for label, key, is_text in [
+            ("Name", "party_name", False), ("Address", "party_address", True),
+            ("GSTIN", "party_gstin", False), ("State", "party_state", False),
+            ("Phone", "party_phone", False), ("Email", "party_email", False),
+        ]:
+            ttk.Label(left, text=label, style="Mute.TLabel").pack(anchor="w", pady=(6, 0))
+            if is_text:
+                w = tk.Text(left, width=30, height=4, font=FONT, bg=SOFT, fg=INK,
+                            relief="flat", highlightthickness=1,
+                            highlightbackground=LINE, highlightcolor=RED,
+                            padx=6, pady=5, insertbackground=INK)
+            else:
+                w = ttk.Entry(left, width=32)
+            w.pack(fill="x")
+            self.party[key] = w
+        self.party["party_state"].insert(0, COMPANY.get("state", ""))
+
+        ttk.Button(left, text="Save customer", style="Ghost.TButton",
+                   command=self._save_current_customer).pack(fill="x", pady=(12, 0))
+
+    def _build_items(self, body):
+        outer, right = card(body, "Line items")
+        outer.grid(row=0, column=1, sticky="nsew")
+
+        cols = ("desc", "hsn", "qty", "unit", "rate", "amount")
+        wrap = ttk.Frame(right)
+        wrap.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(wrap, columns=cols, show="headings", height=10)
+        spec = (("Item name", 300, "w"), ("HSN", 80, "w"), ("Qty", 60, "e"),
+                ("Unit", 60, "w"), ("Rate", 100, "e"), ("Amount", 110, "e"))
+        for c, (t, w, a) in zip(cols, spec):
+            self.tree.heading(c, text=t)
+            self.tree.column(c, width=w, anchor=a)
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.tree.tag_configure("odd", background=SOFT)
+        self.tree.bind("<Delete>", lambda e: self._remove_item())
+
+        add = tk.Frame(right, bg=PANEL)
+        add.pack(fill="x", pady=(12, 0))
+        self.fields = {}
+        spec = [("desc", "Item name", ttk.Entry, 30, {}),
+                ("hsn", "HSN", ttk.Combobox, 8, {"values": HSN_CHOICES}),
+                ("qty", "Qty", ttk.Entry, 6, {}),
+                ("unit", "Unit", ttk.Combobox, 7, {"values": UNIT_CHOICES}),
+                ("rate", "Rate", ttk.Entry, 10, {})]
+        for i, (key, label, cls, width, kw) in enumerate(spec):
+            ttk.Label(add, text=label, style="Mute.TLabel").grid(
+                row=0, column=i, sticky="w", padx=(0 if i == 0 else 6, 0))
+            w = cls(add, width=width, **kw)
+            w.grid(row=1, column=i, padx=(0 if i == 0 else 6, 0), sticky="we")
+            w.bind("<Return>", lambda _e: self._add_item())
+            self.fields[key] = w
+        add.columnconfigure(0, weight=1)
+        self.fields["unit"].set("Nos")
+        ttk.Button(add, text="Add item", style="Primary.TButton",
+                   command=self._add_item).grid(row=1, column=5, padx=(10, 0))
+        ttk.Button(add, text="Remove", style="Ghost.TButton",
+                   command=self._remove_item).grid(row=1, column=6, padx=(6, 0))
+
+    def _build_footer(self):
+        outer, bot = card(self, "Totals & notes")
+        outer.pack(fill="x", padx=14, pady=12)
+        bot.columnconfigure(1, weight=1)
+
+        tax = ttk.Frame(bot)
+        tax.grid(row=0, column=0, sticky="nw", padx=(0, 18))
+        for i, (label, attr, val, w) in enumerate([
+                ("Discount (₹)", "discount", "0", 12), ("GST %", "gst_rate", "18", 8)]):
+            ttk.Label(tax, text=label, style="Mute.TLabel").grid(row=0, column=i, sticky="w", padx=(0 if i == 0 else 8, 0))
+            e = ttk.Entry(tax, width=w)
+            e.insert(0, val)
+            e.grid(row=1, column=i, padx=(0 if i == 0 else 8, 0))
+            e.bind("<KeyRelease>", lambda _e: self._recalc())
+            setattr(self, attr, e)
+        ttk.Label(tax, text="Supply", style="Mute.TLabel").grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.supply = ttk.Combobox(tax, state="readonly", width=26,
+                                   values=["Intra-State (CGST+SGST)", "Inter-State (IGST)"])
+        self.supply.current(0)
+        self.supply.grid(row=3, column=0, columnspan=2, sticky="we")
+        self.supply.bind("<<ComboboxSelected>>", lambda _e: self._recalc())
+
+        mid = ttk.Frame(bot)
+        mid.grid(row=0, column=1, sticky="nsew", padx=(0, 18))
+        ttk.Label(mid, text="Notes", style="Mute.TLabel").pack(anchor="w")
+        self.notes = tk.Text(mid, height=4, font=FONT, bg=SOFT, fg=INK, relief="flat",
+                             highlightthickness=1, highlightbackground=LINE,
+                             highlightcolor=RED, padx=6, pady=5, insertbackground=INK)
+        self.notes.pack(fill="both", expand=True)
+
+        sm = ttk.Frame(bot)
+        sm.grid(row=0, column=2, sticky="ne")
+        self._sum_labels = {}
+        for i, (key, text) in enumerate([("sub", "Subtotal"), ("disc", "Discount"), ("tax", "Tax")]):
+            ttk.Label(sm, text=text, style="Mute.TLabel").grid(row=i, column=0, sticky="w")
+            v = ttk.Label(sm, text="0.00", font=FONT)
+            v.grid(row=i, column=1, sticky="e", padx=(30, 0))
+            self._sum_labels[key] = v
+        tk.Frame(sm, bg=INK, height=2).grid(row=3, column=0, columnspan=2, sticky="we", pady=(6, 4))
+        ttk.Label(sm, text="Grand total", font=FONT_B).grid(row=4, column=0, sticky="w")
+        self._sum_labels["total"] = ttk.Label(sm, text="₹ 0.00", font=("Segoe UI", 16, "bold"), foreground=RED)
+        self._sum_labels["total"].grid(row=4, column=1, sticky="e", padx=(30, 0))
+        self.summary = self._sum_labels["total"]
+
+        acts = ttk.Frame(bot)
+        acts.grid(row=1, column=0, columnspan=3, sticky="we", pady=(12, 0))
+        ttk.Button(acts, text="Print", style="Primary.TButton",
+                   command=self._print).pack(side="right", padx=(6, 0))
+        ttk.Button(acts, text="Generate PDF", style="Success.TButton",
+                   command=self._generate).pack(side="right", padx=(6, 0))
+        ttk.Button(acts, text="Preview", style="Ghost.TButton",
+                   command=self._preview).pack(side="right", padx=(6, 0))
+        self.printer_var = tk.StringVar()
+        self.printer_pick = ttk.Combobox(acts, textvariable=self.printer_var,
+                                         state="readonly", width=22)
+        self.printer_pick.pack(side="right", padx=(0, 10))
+        ttk.Label(acts, text="USB printer", style="Mute.TLabel").pack(side="right", padx=(0, 6))
+
+    def _refresh_tree(self):
+        self.tree.delete(*self.tree.get_children())
+        for n, it in enumerate(self.items):
+            amt = float(it["qty"]) * float(it["rate"])
+            self.tree.insert("", "end", tags=("odd",) if n % 2 else (), values=(
+                it["desc"], it.get("hsn", ""), f"{it['qty']:g}",
+                it.get("unit", "Nos"), f"{it['rate']:,.2f}", f"{amt:,.2f}"))
+
+    def _recalc(self):
+        t = self._compute()
+        if hasattr(self, "_sum_labels"):
+            self._sum_labels["sub"].config(text=f"{t['subtotal']:,.2f}")
+            self._sum_labels["disc"].config(text=f"-{t['discount']:,.2f}")
+            self._sum_labels["tax"].config(text=f"{t['cgst'] + t['sgst'] + t['igst']:,.2f}")
+            self._sum_labels["total"].config(text=f"₹ {t['total']:,.2f}")
+        return t
+
+    def _new_doc(self):
+        self.items = []
+        self._refresh_tree()
+        for key, w in self.party.items():
+            if isinstance(w, tk.Text):
+                w.delete("1.0", "end")
+            else:
+                w.delete(0, "end")
+        self.party["party_state"].insert(0, COMPANY.get("state", ""))
+        self.notes.delete("1.0", "end")
+        self.discount.delete(0, "end")
+        self.discount.insert(0, "0")
+        self.doc_date.delete(0, "end")
+        self.doc_date.insert(0, dt.date.today().isoformat())
+        self._refresh_doc_no()
+        self._recalc()
+
+
 def main():
     init_db()
-    app = BillingApp()
-    app.mainloop()
+    ModernBillingApp().mainloop()
 
 
 if __name__ == "__main__":
